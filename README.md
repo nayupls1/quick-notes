@@ -11,7 +11,7 @@ hold SUPER+N → speak → release → - [ ] Buy milk tomorrow
 
 - **Hold-to-talk hotkey.** Press to record, release to save. No windows pop up.
 - **Codex or Claude Code.** Choose the agent at install time, switch it with one click in the panel, or run `quick-notes agent`.
-- **Bar widget.** The icon pulses while you're recording and shows an hourglass while the agent is writing. Click it to open the checklist, where you can tick, delete or type notes, clear finished items, or open the file.
+- **Bar widget.** The icon pulses while you're recording and shows an hourglass while the agent is writing. Click it to open the checklist, where you can tick, copy, delete or type notes, copy all open tasks, clear finished items (**Clear**), or open the file.
 - **Plain markdown.** Notes go to `~/notes/quick-notes.md` as `- [ ]` / `- [x]` lines, so any editor or sync tool can use them.
 - **Nothing gets lost.** If the agent fails, the raw transcript is saved as a note.
 - **Optional notifications.** Turn the "notes added" notifications on or off. Errors always notify.
@@ -21,7 +21,7 @@ hold SUPER+N → speak → release → - [ ] Buy milk tomorrow
 - Omarchy (Hyprland plus the Quickshell-based `omarchy-shell`)
 - `voxtype` with its daemon running (`systemctl --user enable --now voxtype`)
 - At least one agent CLI, logged in: `codex` (`codex login`) or `claude` (Claude Code)
-- `jq`, `notify-send`, `flock`
+- `jq`, `notify-send`, `flock`, `wl-copy`
 
 ## Install
 
@@ -47,6 +47,7 @@ To skip the prompts, run `./install.sh --key "SUPER + ALT + N" --agent claude`. 
 | Dictate a note | Hold the hotkey, speak, release |
 | Open the checklist | Click the bar icon |
 | Start dictating from the bar | Right-click the icon (click **Stop** in the panel to finish) |
+| Copy tasks | Hover a task and click 󰆏 to copy it, or **Copy all** to copy every open task as plain text, one per line |
 | Open the notes file | Middle-click the icon |
 | Switch agent | **CODEX / CLAUDE** button in the panel, or `quick-notes agent codex\|claude\|toggle` |
 | Notifications on/off | Bell in the panel, or `quick-notes notifications on\|off\|toggle` |
@@ -58,6 +59,7 @@ quick-notes start | stop | cancel
 quick-notes add <text>        # run text through the agent
 quick-notes add-raw <text>    # append verbatim
 quick-notes toggle <line> | remove <line> | clear-done
+quick-notes copy [line]       # open tasks (or one task) → clipboard
 quick-notes notifications [on|off|toggle]
 quick-notes agent [codex|claude|toggle]
 quick-notes path

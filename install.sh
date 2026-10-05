@@ -96,7 +96,7 @@ done
 
 bold "Checking dependencies"
 missing=0
-for cmd in voxtype jq notify-send flock hyprctl omarchy; do
+for cmd in voxtype jq notify-send flock wl-copy hyprctl omarchy; do
   if ! command -v "$cmd" >/dev/null; then
     warn "missing: $cmd"
     missing=1

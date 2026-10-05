@@ -11,6 +11,7 @@
 #   quick-notes toggle <line>   check/uncheck the item on <line>
 #   quick-notes remove <line>   delete the item on <line>
 #   quick-notes clear-done      delete all checked items
+#   quick-notes copy [line]     copy open items (or the item on <line>) as plain text
 #   quick-notes notifications [on|off|toggle]
 #                               show/set "notes added" notifications (errors always notify)
 #   quick-notes agent [codex|claude|toggle]
@@ -227,6 +228,17 @@ case "$cmd" in
     with_lock edit_line "${1:-}" 'd'
     ;;
 
+  copy)
+    if [[ -n ${1:-} ]]; then
+      [[ $1 =~ ^[0-9]+$ ]] || { echo "line must be a number" >&2; exit 2; }
+      text=$(sed -n "${1}p" "$NOTES_FILE" | sed -nE 's/^\s*[-*] \[[ xX]\] //p')
+    else
+      text=$(sed -nE 's/^\s*[-*] \[ \] //p' "$NOTES_FILE")
+    fi
+    [[ -n $text ]] || { echo "nothing to copy" >&2; exit 1; }
+    printf '%s' "$text" | wl-copy
+    ;;
+
   clear-done)
     with_lock sed -i -E '/^\s*[-*] \[[xX]\] /d' "$NOTES_FILE"
     ;;
@@ -255,7 +267,7 @@ case "$cmd" in
   path) echo "$NOTES_FILE" ;;
 
   *)
-    sed -n '2,18s/^# \{0,1\}//p' "$0"
+    sed -n '2,19s/^# \{0,1\}//p' "$0"
     exit 2
     ;;
 esac

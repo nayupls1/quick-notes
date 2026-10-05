@@ -60,7 +60,16 @@ Panel {
     Quickshell.execDetached(["env", "QUICK_NOTES_FILE=" + notesFile, script].concat(args))
   }
 
+  property bool justCopied: false
+
+  function copy(args) {
+    run(["copy"].concat(args || []))
+    justCopied = true
+    copiedTimer.restart()
+  }
+
   function statusText() {
+    if (justCopied) return "Copied to clipboard"
     if (captureState === "recording") return "Listening…"
     if (captureState === "transcribing") return "Transcribing…"
     if (captureState === "thinking") return root.agentLabel + " is writing notes…"
@@ -72,6 +81,8 @@ Panel {
   // re-read it whenever the panel opens or a capture finishes.
   onOpenedChanged: if (opened) { input.text = ""; notesView.reload() }
   onCaptureStateChanged: if (captureState === "idle") notesView.reload()
+
+  Timer { id: copiedTimer; interval: 1500; onTriggered: root.justCopied = false }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -335,15 +346,37 @@ Panel {
                 font.pixelSize: Style.font.body
                 anchors.left: check.right
                 anchors.leftMargin: Style.space(10)
-                anchors.right: removeBtn.left
+                anchors.right: copyBtn.left
                 anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
               }
 
               Text {
+                id: copyBtn
+                text: "󰆏"
+                visible: rowMouse.containsMouse || copyMouse.containsMouse || removeMouse.containsMouse
+                color: root.bar.foreground
+                opacity: copyMouse.containsMouse ? 1 : 0.5
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                anchors.right: removeBtn.left
+                anchors.rightMargin: Style.space(10)
+                anchors.verticalCenter: parent.verticalCenter
+
+                MouseArea {
+                  id: copyMouse
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.copy([String(row.modelData.line)])
+                }
+              }
+
+              Text {
                 id: removeBtn
                 text: "󰅖"
-                visible: rowMouse.containsMouse || removeMouse.containsMouse
+                visible: rowMouse.containsMouse || copyMouse.containsMouse || removeMouse.containsMouse
                 color: root.bar.foreground
                 opacity: removeMouse.containsMouse ? 1 : 0.5
                 font.family: root.bar.fontFamily
@@ -369,7 +402,7 @@ Panel {
       Row {
         width: parent.width
         spacing: Style.space(6)
-        readonly property real cellWidth: (width - spacing * 2) / 3
+        readonly property real cellWidth: (width - spacing * 3) / 4
 
         Button {
           width: parent.cellWidth
@@ -385,8 +418,22 @@ Panel {
 
         Button {
           width: parent.cellWidth
+          iconText: "󰆏"
+          text: "Copy all"
+          tooltipText: "Copy open tasks as plain text"
+          fontSize: Style.font.bodySmall
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+          bordered: true
+          enabled: root.openCount > 0
+          onClicked: root.copy([])
+        }
+
+        Button {
+          width: parent.cellWidth
           iconText: "󰃢"
-          text: "Clear done"
+          text: "Clear"
+          tooltipText: "Remove finished tasks"
           fontSize: Style.font.bodySmall
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
@@ -398,7 +445,7 @@ Panel {
         Button {
           width: parent.cellWidth
           iconText: "󰏫"
-          text: "Open file"
+          text: "Open"
           fontSize: Style.font.bodySmall
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
