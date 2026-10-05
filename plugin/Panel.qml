@@ -22,10 +22,21 @@ Panel {
   readonly property string stateFile: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/quick-notes/state"
   readonly property string configFile: (Quickshell.env("XDG_CONFIG_HOME") || home + "/.config") + "/quick-notes/config"
   property bool notificationsOn: true
+  property string agent: "codex"
+  readonly property string agentLabel: agent === "claude" ? "Claude Code" : "Codex"
+
+  // Last `key=value` wins, matching the script's config_get.
+  function configValue(raw, key) {
+    var lines = String(raw || "").split("\n")
+    var value = ""
+    for (var i = 0; i < lines.length; i++)
+      if (lines[i].indexOf(key + "=") === 0) value = lines[i].slice(key.length + 1).trim()
+    return value
+  }
 
   function parseConfig(raw) {
-    var m = String(raw || "").match(/^notifications=(\w+)\s*$/gm)
-    notificationsOn = !m || m[m.length - 1] !== "notifications=off"
+    notificationsOn = configValue(raw, "notifications") !== "off"
+    agent = configValue(raw, "agent") === "claude" ? "claude" : "codex"
   }
   readonly property string hotkey: String(setting("hotkey", "") || "")
 
@@ -52,7 +63,7 @@ Panel {
   function statusText() {
     if (captureState === "recording") return "Listening…"
     if (captureState === "transcribing") return "Transcribing…"
-    if (captureState === "thinking") return "Codex is writing notes…"
+    if (captureState === "thinking") return root.agentLabel + " is writing notes…"
     if (items.length === 0) return hotkey !== "" ? "Hold " + hotkey + " to dictate" : "Right-click the icon to dictate"
     return openCount + " open · " + doneCount + " done"
   }
@@ -81,7 +92,7 @@ Panel {
     printErrors: false
     onFileChanged: reload()
     onLoaded: root.parseConfig(text())
-    onLoadFailed: root.notificationsOn = true
+    onLoadFailed: root.parseConfig("")
   }
 
   FileView {
@@ -150,7 +161,7 @@ Panel {
           id: heroLabels
           anchors.left: heroIcon.right
           anchors.leftMargin: Style.space(14)
-          anchors.right: bell.left
+          anchors.right: agentSwitch.left
           anchors.rightMargin: Style.space(10)
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(2)
@@ -172,6 +183,46 @@ Panel {
             font.letterSpacing: 1.2
             elide: Text.ElideRight
             width: parent.width
+          }
+        }
+
+        Rectangle {
+          id: agentSwitch
+          anchors.right: bell.left
+          anchors.rightMargin: Style.space(12)
+          anchors.verticalCenter: parent.verticalCenter
+          implicitWidth: agentText.implicitWidth + Style.space(12)
+          implicitHeight: agentText.implicitHeight + Style.space(6)
+          radius: Style.cornerRadius
+          color: agentMouse.containsMouse ? Style.hoverFillFor(root.bar.foreground, Color.accent, Color.urgent) : "transparent"
+          border.width: 1
+          border.color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b, 0.3)
+
+          Text {
+            id: agentText
+            anchors.centerIn: parent
+            text: root.agent === "claude" ? "CLAUDE" : "CODEX"
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.2
+          }
+
+          MouseArea {
+            id: agentMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.agent = root.agent === "claude" ? "codex" : "claude"
+              root.run(["agent", root.agent])
+            }
+          }
+
+          PanelToolTip {
+            visible: agentMouse.containsMouse
+            text: "Notes written by " + root.agentLabel + " — click to switch"
           }
         }
 

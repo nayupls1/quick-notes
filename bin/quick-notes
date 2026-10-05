@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Voice quick notes: hold a key to dictate with voxtype, Codex turns the
-# transcript into checklist items, which are appended to a markdown notepad.
+# Voice quick notes: hold a key to dictate with voxtype, an agent (Codex or
+# Claude Code) turns the transcript into checklist items, which are appended
+# to a markdown notepad.
 #
 #   quick-notes start           begin recording (bind to key press)
-#   quick-notes stop            stop, transcribe, ask Codex, append notes (key release)
+#   quick-notes stop            stop, transcribe, ask the agent, append notes (key release)
 #   quick-notes cancel          discard the current recording
-#   quick-notes add <text>      append items from text through Codex
+#   quick-notes add <text>      append items from text through the agent
 #   quick-notes add-raw <text>  append one item verbatim
 #   quick-notes toggle <line>   check/uncheck the item on <line>
 #   quick-notes remove <line>   delete the item on <line>
 #   quick-notes clear-done      delete all checked items
 #   quick-notes notifications [on|off|toggle]
 #                               show/set "notes added" notifications (errors always notify)
+#   quick-notes agent [codex|claude|toggle]
+#                               show/set which agent writes the notes
 #   quick-notes path            print the notes file path
 
 set -uo pipefail
@@ -59,9 +62,7 @@ append_items() {
   done
 }
 
-# Prints one checklist item per line on stdout.
-ask_codex() {
-  local text="$1" out="$STATE_DIR/codex-last.json"
+write_schema() {
   cat >"$SCHEMA" <<'EOF'
 {
   "type": "object",
@@ -72,10 +73,10 @@ ask_codex() {
   "additionalProperties": false
 }
 EOF
-  rm -f "$out"
+}
 
-  local prompt
-  prompt=$(cat <<EOF
+build_prompt() {
+  cat <<EOF
 You turn a voice-dictated note into checklist items for a personal notepad.
 
 Rules:
@@ -88,11 +89,15 @@ Rules:
 
 Dictation:
 """
-$text
+$1
 """
 EOF
-)
+}
 
+# Each ask_* prints one checklist item per line on stdout.
+ask_codex() {
+  local out="$STATE_DIR/codex-last.json"
+  rm -f "$out"
   # shellcheck disable=SC2086
   codex exec \
     --skip-git-repo-check --ephemeral \
@@ -101,19 +106,52 @@ EOF
     ${QUICK_NOTES_CODEX_ARGS:-} \
     --output-schema "$SCHEMA" \
     -o "$out" \
-    "$prompt" </dev/null >"$STATE_DIR/codex.log" 2>&1 || return 1
+    "$(build_prompt "$1")" </dev/null >"$STATE_DIR/agent.log" 2>&1 || return 1
 
   jq -r '.items[]' "$out" 2>/dev/null
+}
+
+ask_claude() {
+  local out="$STATE_DIR/claude-last.json"
+  rm -f "$out"
+  # Run from the state dir so no project CLAUDE.md is picked up; no tools.
+  # shellcheck disable=SC2086
+  (cd "$STATE_DIR" && claude -p \
+    --output-format json \
+    --json-schema "$(cat "$SCHEMA")" \
+    --tools "" \
+    --no-session-persistence \
+    --effort "${QUICK_NOTES_EFFORT:-low}" \
+    ${QUICK_NOTES_CLAUDE_ARGS:-} \
+    "$(build_prompt "$1")" </dev/null >"$out" 2>"$STATE_DIR/agent.log") || return 1
+
+  jq -e '.is_error != true' "$out" >/dev/null 2>&1 || return 1
+  jq -r '.structured_output.items[]' "$out" 2>/dev/null
+}
+
+current_agent() {
+  local agent="${QUICK_NOTES_AGENT:-$(config_get agent)}"
+  echo "${agent:-codex}"
+}
+
+agent_label() { [[ $(current_agent) == claude ]] && echo "Claude Code" || echo "Codex"; }
+
+ask_agent() {
+  write_schema
+  case "$(current_agent)" in
+    claude) ask_claude "$1" ;;
+    *) ask_codex "$1" ;;
+  esac
 }
 
 process_text() {
   local text="$1" items
   set_state thinking
-  if ! items=$(ask_codex "$text"); then
+  if ! items=$(ask_agent "$text"); then
     # Never lose the dictation: fall back to the raw transcript.
     printf '%s\n' "$text" | with_lock append_items
     set_state idle
-    notify_error "Codex failed — saved raw note" "$text"
+    notify_error "$(agent_label) failed — saved raw note" "$text"
     return 1
   fi
 
@@ -204,11 +242,20 @@ case "$cmd" in
     esac
     ;;
 
+  agent)
+    case "${1:-}" in
+      codex|claude) config_set agent "$1" ;;
+      toggle) config_set agent "$([[ $(current_agent) == claude ]] && echo codex || echo claude)" ;;
+      "") current_agent ;;
+      *) echo "usage: quick-notes agent [codex|claude|toggle]" >&2; exit 2 ;;
+    esac
+    ;;
+
   state) get_state ;;
   path) echo "$NOTES_FILE" ;;
 
   *)
-    sed -n '2,15s/^# \{0,1\}//p' "$0"
+    sed -n '2,18s/^# \{0,1\}//p' "$0"
     exit 2
     ;;
 esac

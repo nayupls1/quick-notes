@@ -2,8 +2,8 @@
 # Install quick-notes: links the CLI, copies the bar plugin into the Omarchy
 # shell config, adds it to the bar, and binds a hold-to-dictate hotkey.
 #
-#   ./install.sh                     interactive (asks for the hotkey)
-#   ./install.sh --key "SUPER + N"   non-interactive
+#   ./install.sh                     interactive (asks for the agent and hotkey)
+#   ./install.sh --key "SUPER + N" --agent claude   non-interactive
 #   ./install.sh --uninstall
 #
 # Re-run after editing anything in this repo to update the installed copy.
@@ -81,10 +81,13 @@ uninstall() {
 }
 
 key=""
+agent=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --key) key="$2"; shift 2 ;;
     --key=*) key="${1#*=}"; shift ;;
+    --agent) agent="$2"; shift 2 ;;
+    --agent=*) agent="${1#*=}"; shift ;;
     --uninstall) uninstall; exit 0 ;;
     -h|--help) sed -n '2,9s/^# \{0,1\}//p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -93,15 +96,40 @@ done
 
 bold "Checking dependencies"
 missing=0
-for cmd in voxtype codex jq notify-send flock hyprctl omarchy; do
+for cmd in voxtype jq notify-send flock hyprctl omarchy; do
   if ! command -v "$cmd" >/dev/null; then
     warn "missing: $cmd"
     missing=1
   fi
 done
+command -v codex >/dev/null || command -v claude >/dev/null || { warn "missing: codex or claude (Claude Code)"; missing=1; }
 [[ $missing -eq 0 ]] || { echo "Install the missing tools and re-run." >&2; exit 1; }
 systemctl --user is-active --quiet voxtype || warn "voxtype daemon isn't running (systemctl --user enable --now voxtype)"
-codex login status >/dev/null 2>&1 || warn "codex doesn't look logged in (run: codex login)"
+
+if [[ -z $agent ]]; then
+  available=()
+  command -v codex >/dev/null && available+=(codex)
+  command -v claude >/dev/null && available+=(claude)
+  current=$("$REPO/bin/quick-notes" agent 2>/dev/null)
+  [[ " ${available[*]} " == *" $current "* ]] || current="${available[0]}"
+  if [[ ${#available[@]} -gt 1 && -t 0 ]]; then
+    echo
+    bold "Agent"
+    echo "Which agent turns your dictation into notes? (codex / claude)"
+    read -rp "Agent [$current]: " agent
+  fi
+  agent="${agent:-$current}"
+fi
+case "$agent" in
+  codex|claude) command -v "$agent" >/dev/null || { warn "$agent is not installed"; exit 1; } ;;
+  *) echo "agent must be codex or claude" >&2; exit 2 ;;
+esac
+if [[ $agent == codex ]]; then
+  codex login status >/dev/null 2>&1 || warn "codex doesn't look logged in (run: codex login)"
+else
+  claude auth status >/dev/null 2>&1 || warn "Claude Code doesn't look logged in (run: claude, then /login)"
+fi
+"$REPO/bin/quick-notes" agent "$agent"
 
 bold "Installing CLI → $BIN"
 mkdir -p "$(dirname "$BIN")"
@@ -164,7 +192,7 @@ omarchy bar set "$PLUGIN_ID" hotkey "$key" >/dev/null 2>&1 || true
 
 echo
 bold "Installed."
-echo "  • Hold $key, speak, release → Codex turns it into checklist items"
+echo "  • Hold $key, speak, release → $([[ $agent == claude ]] && echo "Claude Code" || echo Codex) turns it into checklist items"
 echo "  • Click the note icon (top right) to view / tick off / type notes"
 echo "  • Right-click the icon to start dictating, middle-click to open the file"
 echo "  • Notes: $(quick-notes path)"
