@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Voice quick notes: hold a key to dictate with voxtype, Codex turns the
+# transcript into checklist items, which are appended to a markdown notepad.
+#
+#   quick-notes start           begin recording (bind to key press)
+#   quick-notes stop            stop, transcribe, ask Codex, append notes (key release)
+#   quick-notes cancel          discard the current recording
+#   quick-notes add <text>      append items from text through Codex
+#   quick-notes add-raw <text>  append one item verbatim
+#   quick-notes toggle <line>   check/uncheck the item on <line>
+#   quick-notes remove <line>   delete the item on <line>
+#   quick-notes clear-done      delete all checked items
+#   quick-notes notifications [on|off|toggle]
+#                               show/set "notes added" notifications (errors always notify)
+#   quick-notes path            print the notes file path
+
+set -uo pipefail
+
+NOTES_FILE="${QUICK_NOTES_FILE:-$HOME/notes/quick-notes.md}"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/quick-notes"
+STATE_FILE="$STATE_DIR/state"
+TRANSCRIPT="$STATE_DIR/transcript.txt"
+SCHEMA="$STATE_DIR/schema.json"
+LOCK="$STATE_DIR/lock"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/quick-notes/config"
+
+mkdir -p "$STATE_DIR" "$(dirname "$NOTES_FILE")"
+[[ -f $NOTES_FILE ]] || : >"$NOTES_FILE"
+
+set_state() { printf '%s\n' "$1" >"$STATE_FILE"; }
+get_state() { cat "$STATE_FILE" 2>/dev/null || echo idle; }
+notify_error() { notify-send -a "Quick notes" -i accessories-text-editor "$@" 2>/dev/null || true; }
+
+config_get() { sed -n "s/^$1=//p" "$CONFIG" 2>/dev/null | tail -1; }
+config_set() {
+  mkdir -p "$(dirname "$CONFIG")"
+  touch "$CONFIG"
+  sed -i "/^$1=/d" "$CONFIG"
+  printf '%s=%s\n' "$1" "$2" >>"$CONFIG"
+}
+
+# Success notifications respect the config; default on.
+notify() { [[ $(config_get notifications) == off ]] || notify_error "$@"; }
+
+with_lock() {
+  exec 9>"$LOCK"
+  flock 9
+  "$@"
+  local status=$?
+  flock -u 9
+  return $status
+}
+
+append_items() {
+  local item
+  while IFS= read -r item; do
+    item="${item//$'\n'/ }"
+    [[ -n ${item// /} ]] && printf -- '- [ ] %s\n' "$item" >>"$NOTES_FILE"
+  done
+}
+
+# Prints one checklist item per line on stdout.
+ask_codex() {
+  local text="$1" out="$STATE_DIR/codex-last.json"
+  cat >"$SCHEMA" <<'EOF'
+{
+  "type": "object",
+  "properties": {
+    "items": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["items"],
+  "additionalProperties": false
+}
+EOF
+  rm -f "$out"
+
+  local prompt
+  prompt=$(cat <<EOF
+You turn a voice-dictated note into checklist items for a personal notepad.
+
+Rules:
+- Split the dictation into separate, self-contained items (one task or thought each).
+- Keep each item short and imperative where it makes sense ("Buy milk", "Email Sam about the invoice").
+- Fix obvious speech-to-text errors and drop filler words, but never invent content.
+- Keep dates, times, names and numbers exactly as spoken.
+- If there is nothing meaningful, return an empty list.
+- Do not run any commands or read any files. Respond only with the JSON object.
+
+Dictation:
+"""
+$text
+"""
+EOF
+)
+
+  # shellcheck disable=SC2086
+  codex exec \
+    --skip-git-repo-check --ephemeral \
+    -s read-only -C "$STATE_DIR" \
+    -c model_reasoning_effort="${QUICK_NOTES_EFFORT:-low}" \
+    ${QUICK_NOTES_CODEX_ARGS:-} \
+    --output-schema "$SCHEMA" \
+    -o "$out" \
+    "$prompt" </dev/null >"$STATE_DIR/codex.log" 2>&1 || return 1
+
+  jq -r '.items[]' "$out" 2>/dev/null
+}
+
+process_text() {
+  local text="$1" items
+  set_state thinking
+  if ! items=$(ask_codex "$text"); then
+    # Never lose the dictation: fall back to the raw transcript.
+    printf '%s\n' "$text" | with_lock append_items
+    set_state idle
+    notify_error "Codex failed — saved raw note" "$text"
+    return 1
+  fi
+
+  if [[ -z $items ]]; then
+    set_state idle
+    notify "Nothing to note" "$text"
+    return 0
+  fi
+
+  printf '%s\n' "$items" | with_lock append_items
+  set_state idle
+  notify "Added $(printf '%s\n' "$items" | wc -l) note(s)" "$items"
+}
+
+# Rewrites line <n> of the notes file with sed expression <expr>, only if
+# that line is a checklist item.
+edit_line() {
+  local n="$1" expr="$2"
+  [[ $n =~ ^[0-9]+$ ]] || { echo "line must be a number" >&2; return 2; }
+  sed -n "${n}p" "$NOTES_FILE" | grep -qE '^\s*[-*] \[[ xX]\] ' || return 1
+  sed -i "${n}${expr}" "$NOTES_FILE"
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  start)
+    [[ $(get_state) == recording ]] && exit 0
+    rm -f "$TRANSCRIPT"
+    set_state recording
+    voxtype record start --file="$TRANSCRIPT" || { set_state idle; notify_error "Could not start voxtype"; exit 1; }
+    ;;
+
+  stop)
+    [[ $(get_state) == recording ]] || exit 0
+    set_state transcribing
+    voxtype record stop --wait --timeout 60
+    status=$?
+    if [[ $status -ne 0 || ! -s $TRANSCRIPT ]]; then
+      set_state idle
+      [[ $status -eq 3 ]] || notify_error "Transcription failed" "voxtype exited with $status"
+      exit 0
+    fi
+    process_text "$(cat "$TRANSCRIPT")"
+    ;;
+
+  cancel)
+    voxtype record cancel 2>/dev/null
+    set_state idle
+    ;;
+
+  add)
+    [[ $# -gt 0 ]] || { echo "usage: quick-notes add <text>" >&2; exit 2; }
+    process_text "$*"
+    ;;
+
+  add-raw)
+    [[ $# -gt 0 ]] || { echo "usage: quick-notes add-raw <text>" >&2; exit 2; }
+    printf '%s\n' "$*" | with_lock append_items
+    ;;
+
+  toggle)
+    line=$(sed -n "${1:-0}p" "$NOTES_FILE")
+    if [[ $line =~ ^[[:space:]]*[-*]\ \[[xX]\]\  ]]; then
+      with_lock edit_line "$1" 's/\[[xX]\]/[ ]/'
+    else
+      with_lock edit_line "$1" 's/\[ \]/[x]/'
+    fi
+    ;;
+
+  remove)
+    with_lock edit_line "${1:-}" 'd'
+    ;;
+
+  clear-done)
+    with_lock sed -i -E '/^\s*[-*] \[[xX]\] /d' "$NOTES_FILE"
+    ;;
+
+  notifications)
+    current=$(config_get notifications)
+    current=${current:-on}
+    case "${1:-}" in
+      on|off) config_set notifications "$1" ;;
+      toggle) config_set notifications "$([[ $current == on ]] && echo off || echo on)" ;;
+      "") echo "$current" ;;
+      *) echo "usage: quick-notes notifications [on|off|toggle]" >&2; exit 2 ;;
+    esac
+    ;;
+
+  state) get_state ;;
+  path) echo "$NOTES_FILE" ;;
+
+  *)
+    sed -n '2,15s/^# \{0,1\}//p' "$0"
+    exit 2
+    ;;
+esac

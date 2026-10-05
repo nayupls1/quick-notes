@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "local.quick-notes",
+  "name": "Quick notes",
+  "version": "1.0.0",
+  "author": "nayupls1",
+  "license": "MIT",
+  "description": "Voice quick notes: hold a key to dictate, Codex turns it into checklist items in a markdown notepad.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Quick notes",
+    "description": "Checklist notepad with voice capture via voxtype + Codex.",
+    "category": "Productivity",
+    "aliases": ["notes", "todo"],
+    "allowMultiple": false,
+    "defaults": {
+      "notesFile": "",
+      "hotkey": ""
+    },
+    "schema": [
+      { "key": "notesFile", "type": "path", "label": "Notes file", "defaultValue": "", "description": "Markdown checklist file. Defaults to ~/notes/quick-notes.md." },
+      { "key": "hotkey", "type": "string", "label": "Hotkey hint", "defaultValue": "", "description": "Shown in the panel; set by install.sh." }
+    ]
+  }
+}
